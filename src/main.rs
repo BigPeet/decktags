@@ -23,7 +23,7 @@ fn main() -> Result<(), std::io::Error> {
     // Read command line arguments
     let cli = Cli::parse();
 
-    let data_dir = data::DataDirectory::ensure_exists(APP_NAME)?;
+    let mut data_dir = data::DataDirectory::ensure_exists(APP_NAME)?;
     let last_update = data_dir.updated_at();
     let two_weeks_ago = chrono::Utc::now().checked_sub_days(chrono::Days::new(14));
     let delta = chrono::TimeDelta::days(14);
