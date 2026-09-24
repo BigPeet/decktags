@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::path::PathBuf;
+use thiserror::Error;
 
 /// A data directory type which ensures the underlying directory does exist.
-pub struct DataDirectory {
+pub struct AppData {
     dir: PathBuf,
     bulk_data: Option<BulkData>,
 }
@@ -28,89 +29,73 @@ struct BulkData {
 }
 
 const BULK_DATA_JSON: &str = "bulk-data.json";
+const TMP_DIR: &str = "tmp";
 
-type DataError = std::io::Error;
+/// A common error type for data directory operations
+#[derive(Error, Debug)]
+pub enum DataError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
 
-impl DataDirectory {
+    #[error("JSON parsing error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("Could not determine XDG_DATA_HOME")]
+    XdgDataHomeNotFound,
+}
+
+impl BulkData {
+    /// Returns the `DateTime<Utc>` of the most recent relevant update, if present.
+    pub fn updated_at(&self) -> Option<DateTime<Utc>> {
+        self.entries
+            .iter()
+            .filter_map(|data| {
+                if matches!(data.kind.as_str(), "oracle_cards" | "oracle_tags") {
+                    Some(data.updated_at)
+                } else {
+                    None
+                }
+            })
+            .max()
+    }
+}
+
+impl AppData {
     /// Ensures that the data directory for the application exists.
     /// If it does not exist, it will be created.
-    pub fn ensure_exists(app_name: &str) -> Result<DataDirectory, DataError> {
+    pub fn new(app_name: &str) -> Result<AppData, DataError> {
         let dir = dirs::data_local_dir()
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "Could not determine XDG_DATA_HOME",
-                )
-            })?
+            .ok_or(DataError::XdgDataHomeNotFound)?
             .join(app_name);
 
         if !dir.exists() {
             std::fs::create_dir_all(&dir)?;
         }
 
-        Ok(DataDirectory {
-            dir,
-            bulk_data: None, // not yet initialized
-        })
+        let bulk_data = std::fs::read_to_string(dir.join(BULK_DATA_JSON))
+            .and_then(|content| Ok(serde_json::from_str::<BulkData>(&content)?))
+            .ok();
+
+        Ok(AppData { dir, bulk_data })
     }
 
-    fn init_bulk_data(&self) -> Result<BulkData, DataError> {
-        let bulk_data_path = self.dir.join(BULK_DATA_JSON);
-        let bulk_data_json = std::fs::read_to_string(bulk_data_path)?;
-        Ok(serde_json::from_str::<BulkData>(&bulk_data_json)?)
+    /// Returns the `DateTime<Utc>` of the most recent relevant update, if present.
+    pub fn updated_at(&self) -> Option<DateTime<Utc>> {
+        self.bulk_data.as_ref().and_then(BulkData::updated_at)
     }
 
-    fn get_or_init_bulk_data(&mut self) -> Result<&BulkData, DataError> {
-        match self.bulk_data {
-            Some(ref data) => Ok(data),
-            None => {
-                self.bulk_data = Some(self.init_bulk_data()?);
-                Ok(self.bulk_data.as_ref().unwrap()) // unwrap: known to be Some at this point
-            }
-        }
+    pub fn check_for_updates(&self) -> Option<DateTime<Utc>> {
+        todo!()
     }
 
-    pub fn updated_at(&mut self) -> Option<DateTime<Utc>> {
-        match self.get_or_init_bulk_data().ok() {
-            Some(bulk_data) => bulk_data
-                .entries
-                .iter()
-                .filter_map(|data| {
-                    if matches!(data.kind.as_str(), "oracle_cards" | "oracle_tags") {
-                        Some(data.updated_at)
-                    } else {
-                        None
-                    }
-                })
-                .max(),
-            None => None,
-        }
-        // if let Some(bulk_data) = self.get_or_init_bulk_data().ok() {
+    pub fn download_data(&self) -> Result<(), DataError> {
+        todo!()
+    }
 
-        // }
-
-        // let bulk_data_path = self.dir.join(BULK_DATA_JSON);
-        // if !bulk_data_path.exists() {
-        // // The bulk data file does not exist (yet).
-        // return None;
-        // }
-        // if let Ok(bulk_data_json) = std::fs::read_to_string(bulk_data_path)
-        // && let Ok(bulk_data_list) = serde_json::from_str::<BulkData>(&bulk_data_json)
-        // {
-        // // TODO: Better logging for the case there is an error when reading the file, there
-        // // are no entries, or there is no max.
-        // return bulk_data_list
-        // .entries
-        // .iter()
-        // .filter_map(|data| {
-        // if matches!(data.kind.as_str(), "oracle_cards" | "oracle_tags") {
-        // Some(data.updated_at)
-        // } else {
-        // None
-        // }
-        // })
-        // .max();
-        // }
-        // None
+    pub fn oracle_cards(&self) -> Result<(), DataError> {
+        todo!()
+    }
+    pub fn oracle_tags(&self) -> Result<(), DataError> {
+        todo!()
     }
 }
