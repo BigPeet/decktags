@@ -1,15 +1,17 @@
+#![allow(unused)]
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-/// A data directory type which ensures the underlying directory does exist.
-pub struct AppData {
+/// A data layer for the app which manages the underlying directory structure as well as access to
+/// the required scryfall data.
+pub struct DataLayer {
     dir: PathBuf,
     bulk_data: Option<BulkData>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct BulkDataEntry {
     id: String,
     #[serde(rename = "type")]
@@ -22,14 +24,17 @@ struct BulkDataEntry {
     jsonl_download_uri: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct BulkData {
     #[serde(rename = "data")]
     entries: Vec<BulkDataEntry>,
 }
 
+pub const APP_NAME: &str = "decktags";
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const BULK_DATA_JSON: &str = "bulk-data.json";
 const TMP_DIR: &str = "tmp";
+const SCRYFALL_BULK_DATA_URL: &str = "https://api.scryfall.com/bulk-data";
 
 /// A common error type for data directory operations
 #[derive(Error, Debug)]
@@ -42,6 +47,12 @@ pub enum DataError {
 
     #[error("Could not determine XDG_DATA_HOME")]
     XdgDataHomeNotFound,
+
+    #[error("HTTP request error: {0}")]
+    Http(#[from] reqwest::Error),
+
+    #[error("Unsuccessful status code: {0}")]
+    UnsuccessfulRequest(reqwest::StatusCode),
 }
 
 impl BulkData {
@@ -60,10 +71,27 @@ impl BulkData {
     }
 }
 
-impl AppData {
+fn download_bulk_data_file() -> Result<BulkData, DataError> {
+    let response = reqwest::blocking::Client::new()
+        .get(SCRYFALL_BULK_DATA_URL)
+        .header(
+            reqwest::header::USER_AGENT,
+            format!("{APP_NAME}/{APP_VERSION}"),
+        )
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()?;
+    if response.status().is_success() {
+        Ok(response.json()?)
+    } else {
+        Err(DataError::UnsuccessfulRequest(response.status()))
+    }
+}
+
+impl DataLayer {
+    /// Creates a new data layer for the app.
     /// Ensures that the data directory for the application exists.
-    /// If it does not exist, it will be created.
-    pub fn new(app_name: &str) -> Result<AppData, DataError> {
+    /// Parses existing JSON data.
+    pub fn new(app_name: &str) -> Result<DataLayer, DataError> {
         let dir = dirs::data_local_dir()
             .ok_or(DataError::XdgDataHomeNotFound)?
             .join(app_name);
@@ -72,11 +100,18 @@ impl AppData {
             std::fs::create_dir_all(&dir)?;
         }
 
-        let bulk_data = std::fs::read_to_string(dir.join(BULK_DATA_JSON))
-            .and_then(|content| Ok(serde_json::from_str::<BulkData>(&content)?))
-            .ok();
+        // FIXME: There are two distinct cases I want to handle for these JSON files:
+        // 1. The data is not there -> not an issue, don't report this to user, just set to None
+        // 2. The data is invalid / can not be deserialized -> for now return this as error, but
+        //    might be better to simply warn the user and continue with None
+        let bulk_data = if let Ok(json_content) = std::fs::read_to_string(dir.join(BULK_DATA_JSON))
+        {
+            Some(serde_json::from_str::<BulkData>(&json_content)?)
+        } else {
+            None
+        };
 
-        Ok(AppData { dir, bulk_data })
+        Ok(DataLayer { dir, bulk_data })
     }
 
     /// Returns the `DateTime<Utc>` of the most recent relevant update, if present.
@@ -84,8 +119,11 @@ impl AppData {
         self.bulk_data.as_ref().and_then(BulkData::updated_at)
     }
 
-    pub fn check_for_updates(&self) -> Option<DateTime<Utc>> {
-        todo!()
+    pub fn check_for_updates(&self) -> Result<DateTime<Utc>, DataError> {
+        let new_bulk_data = download_bulk_data_file()?;
+        Ok(new_bulk_data
+            .updated_at()
+            .expect("Expected at least one relevant update in bulk data"))
     }
 
     pub fn download_data(&self) -> Result<(), DataError> {

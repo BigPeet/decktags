@@ -1,3 +1,4 @@
+#![allow(unused)]
 mod data;
 use anyhow::Result;
 use clap::Parser;
@@ -15,7 +16,6 @@ struct Cli {
 }
 
 // constant with app name
-const APP_NAME: &str = "decktags";
 const DATA_AGE_WARNING: i64 = 14;
 
 fn main() -> Result<()> {
@@ -23,13 +23,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // TODO: move this logic into a separate function, e.g. an impl of `App` type
-    let app_data = data::AppData::new(APP_NAME)?;
+    let app_data = data::DataLayer::new(data::APP_NAME)?;
 
     // If --update-data flag is passed or the files do not exist, download the data files into XDG_DATA_HOME
     // TODO: move part of this decision into appropriate methods
     let last_update = app_data.updated_at();
     if cli.update_data || last_update.is_none() {
-        let newest_update = app_data.check_for_updates();
+        let newest_update = Some(app_data.check_for_updates()?);
         if newest_update > last_update {
             println!("There is a newer update!");
             app_data.download_data()?; // TODO: give user option to continue
