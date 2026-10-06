@@ -4,11 +4,20 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+// TODO: organize this into various fitting modules
+
+struct ScryfallData {
+    meta: BulkData,
+    cards: Option<String>, // or lazy cell?
+    tags: Option<String>,  // or lazy cell?
+}
+
 /// A data layer for the app which manages the underlying directory structure as well as access to
 /// the required scryfall data.
 pub struct DataLayer {
     dir: PathBuf,
-    bulk_data: Option<BulkData>,
+    local_data: Option<ScryfallData>,
+    tmp_data: Option<ScryfallData>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +62,19 @@ pub enum DataError {
 
     #[error("Unsuccessful status code: {0}")]
     UnsuccessfulRequest(reqwest::StatusCode),
+}
+
+impl ScryfallData {
+    fn local(dir: &Path) -> Result<Self, DataError> {
+        let meta = std::fs::read_to_string(dir.join(BULK_DATA_JSON))
+            .and_then(|content| Ok(serde_json::from_str::<BulkData>(&content)?))?;
+        // TODO: parse cards and tags data as well, if present
+        Ok(ScryfallData {
+            meta,
+            cards: None,
+            tags: None,
+        })
+    }
 }
 
 impl BulkData {
@@ -104,19 +126,25 @@ impl DataLayer {
         // 1. The data is not there -> not an issue, don't report this to user, just set to None
         // 2. The data is invalid / can not be deserialized -> for now return this as error, but
         //    might be better to simply warn the user and continue with None
-        let bulk_data = if let Ok(json_content) = std::fs::read_to_string(dir.join(BULK_DATA_JSON))
-        {
-            Some(serde_json::from_str::<BulkData>(&json_content)?)
-        } else {
-            None
+        let local_data = ScryfallData::local(&dir);
+        let local_data = match local_data {
+            Ok(data) => Some(data),
+            Err(e) => match e {
+                DataError::Io(ref io_err) if io_err.kind() == std::io::ErrorKind::NotFound => None,
+                _ => return Err(e),
+            },
         };
 
-        Ok(DataLayer { dir, bulk_data })
+        Ok(DataLayer {
+            dir,
+            local_data,
+            tmp_data: None,
+        })
     }
 
     /// Returns the `DateTime<Utc>` of the most recent relevant update, if present.
     pub fn updated_at(&self) -> Option<DateTime<Utc>> {
-        self.bulk_data.as_ref().and_then(BulkData::updated_at)
+        self.local_data.as_ref().and_then(|ld| ld.meta.updated_at())
     }
 
     pub fn check_for_updates(&self) -> Result<DateTime<Utc>, DataError> {
