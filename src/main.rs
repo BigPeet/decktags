@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // TODO: move this logic into a separate function, e.g. an impl of `App` type
-    let app_data = data::DataLayer::new(data::APP_NAME)?;
+    let mut app_data = data::DataLayer::new(data::APP_NAME)?;
 
     // If --update-data flag is passed or the files do not exist, download the data files into XDG_DATA_HOME
     // TODO: move part of this decision into appropriate methods
